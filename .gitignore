@@ -1,6 +1,12 @@
+## MacOS
+.DS_Store
+
 ## App
 .env
 app/db/
+app/wordpress/app/
+!app/wordpress/app/.htaccess.sample
+!app/wordpress/app/wp-config.php.sample
 
 ## Node
 node_modules/
