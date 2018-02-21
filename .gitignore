@@ -1,0 +1,6 @@
+## App
+.env
+app/db/
+
+## Node
+node_modules/

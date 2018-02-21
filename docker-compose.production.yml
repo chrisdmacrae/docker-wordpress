@@ -1,0 +1,177 @@
+version: "3"
+
+networks:
+  external:
+    driver: overlay
+  internal:
+    driver: overlay
+
+volumes:
+  wp-app:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: $PWD/app/wordpress/app/
+  wp-themes:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: $PWD/app/wordpress/themes/
+  wp-plugins:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: $PWD/app/wordpress/plugins/
+  wp-db-src:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: $PWD/src/mariadb/
+
+services:
+  traefik:
+    command:
+      - "--web"
+      - "--entrypoints=Name:http Address::80"
+      - "--entrypoints=Name:https Address::443 TLS"
+      - "--entrypoints=Name:https.tls"
+      - "--defaultentrypoints=http,https"
+      - "--docker"
+      - "--docker.endpoint=unix:///var/run/docker.sock"
+      - "--docker.exposedbydefault=false"
+      - "--docker.domain=${LB_DOMAIN}"
+      - "--docker.watch"
+      - "--acme.email=${LB_EMAIL}"
+      - "--acme.storage=acme.json"
+      - "--acme.entrypoint=https"
+      - "--acme.onHostRule=true"
+      - "--acme.httpChallenge"
+      - "--acme.httpChallenge.entryPoint=https"
+    labels:
+      - "traefik.default.protocol=https"
+      - "traefik.frontend.headers.isDevelopment=false"
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+
+  wordpress:
+    labels:
+      - "traefik.default.protocol=https"
+      - "traefik.frontend.headers.isDevelopment=false"
+      - "traefik.frontend.redirect.entryPoint=https"
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 5s
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+
+  db:
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: '0.30'
+          memory: 128M
+        reservations:
+          cpus: '0.30'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+
+  db_backup:
+    image: deitch/mysql-backup
+    depends_on:
+      - db
+    env:
+      DBSERVER: db
+      DB_USER: ${WORDPRESS_DB_USER}
+      DB_PASS: ${WORDPRESS_DB_PASSWORD}
+      DB_DUMP_FREQ: $(MYSQL_DUMP_FREQ)
+      DB_DUMP_BEGIN: ${MYSQL_DUMP_BEGIN}
+      DB_DUMP_TARGET: ${MYSQL_DUMP_TARGET}
+      DB_DUMP_DEBUG: $(MYSQL_DUMP_DEBUG) 
+    volumes:
+      - ./app/db:/db
+#     - /path/to/pre-backup/scripts:/scripts.d/pre-backup
+#     - /path/to/post-backup/scripts:/scripts.d/post-backup
+
+  phpmyadmin:
+    labels:
+      - "traefik.default.protocol=https"
+      - "traefik.frontend.headers.isDevelopment=false"
+      - "traefik.frontend.redirect.entryPoint=https"
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+
+  portainer:
+    container_name: portainer
+    image: portainer/portainer
+    command: --no-auth -H unix:///var/run/docker.sock
+    labels:
+      - "traefik.default.protocol=https"
+      - "traefik.frontend.headers.isDevelopment=false"
+      - "traefik.frontend.redirect.entryPoint=https"
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
+      restart_policy:
+        condition: on-failure

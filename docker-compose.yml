@@ -1,0 +1,209 @@
+version: "3"
+
+networks:
+  external:
+    driver: overlay
+  internal:
+    driver: overlay
+
+volumes:
+  wp-app:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: $PWD/app/wordpress/app/
+  wp-themes:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: $PWD/app/wordpress/themes/
+  wp-plugins:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: $PWD/app/wordpress/plugins/
+  wp-db:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: $PWD/app/db/
+  wp-db-src:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: $PWD/src/mysql/
+
+services:
+  traefik:
+    container_name: traefik
+    image: traefik
+    command:
+      - "--web"
+      - "--entrypoints=Name:http Address::80"
+      - "--entrypoints=Name:https Address::443 TLS"
+      - "--entrypoints=Name:https.tls"
+      - "--defaultentrypoints=http,https"
+      - "--docker"
+      - "--docker.endpoint=unix:///var/run/docker.sock"
+      - "--docker.exposedbydefault=false"
+      - "--docker.domain=${LB_DOMAIN}"
+      - "--docker.watch"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.backend=traefik"
+      - "traefik.docker.network=external"
+      - "traefik.port=8080"
+      - "traefik.default.protocol=http"
+      - "traefik.frontend.rule=Host:monitor.$LB_DOMAIN"
+      - "traefik.frontend.headers.isDevelopment=true"
+    networks:
+      - external
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./app/traefik/config.toml:/traefik.toml
+      - ./app/traefik/acme.json:/acme.json
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+
+  wordpress:
+    container_name: wordpress
+    image: wordpress:latest # https://hub.docker.com/_/wordpress/
+    depends_on:
+      - db
+    restart: unless-stopped
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_NAME: ${WORDPRESS_DB_NAME}
+      WORDPRESS_DB_USER: ${WORDPRESS_DB_USER}
+      WORDPRESS_DB_PASSWORD: ${WORDPRESS_DB_PASSWORD}
+      WORDPRESS_TABLE_PREFIX: ${WORDPRESS_TABLE_PREFIX}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.backend=wordpress"
+      - "traefik.docker.network=external"
+      - "traefik.port=80"
+      - "traefik.default.protocol=http"
+      - "traefik.frontend.rule=Host:wordpress.$LB_DOMAIN"
+      - "traefik.frontend.headers.isDevelopment=true"
+    networks:
+      - external
+      - internal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - wp-app:/var/www/html:rw
+      - wp-themes:/var/www/html/wp-content/themes/:rw
+      - wp-plugins:/var/www/html/wp-content/plugins/:rw
+      #- phpconf:/usr/local/etc/php/conf.d/:rw
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 5s
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+
+  db:
+    container_name: mariadb
+    image: mariadb:latest # https://hub.docker.com/_/mariadb/
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${WORDPRESS_DB_NAME}
+      MYSQL_USER: ${WORDPRESS_DB_USER}
+      MYSQL_PASSWORD: ${WORDPRESS_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.backend=mariadb"
+      - "traefik.docker.network=internal"
+      - "traefik.port=3306"
+    networks:
+      - internal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - wp-db-src:/docker-entrypoint-initdb.d:ro
+      - wp-db:/var/lib/mysql:rw
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: '0.30'
+          memory: 128M
+        reservations:
+          cpus: '0.30'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+
+  phpmyadmin:
+    container_name: phpmyadmin
+    image: phpmyadmin/phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_USER: ${WORDPRESS_DB_USER}
+      PMA_PASSWORD: ${WORDPRESS_DB_PASSWORD}
+      PHP_UPLOAD_MAX_FILESIZE: 1G
+      PHP_MAX_INPUT_VARS: 1G
+    labels:
+      - "traefik.enable=true"
+      - "traefik.backend=phpmyadmin"
+      - "traefik.docker.network=external"
+      - "traefik.port=80"
+      - "traefik.default.protocol=http"
+      - "traefik.frontend.rule=Host:phpmyadmin.$LB_DOMAIN"
+      - "traefik.frontend.headers.isDevelopment=true"
+    networks:
+      - external
+      - internal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  portainer:
+    container_name: portainer
+    image: portainer/portainer
+    command: --no-auth -H unix:///var/run/docker.sock
+    labels:
+      - "traefik.backend=portainer"
+      - "traefik.docker.network=external"
+      - "traefik.enable=true"
+      - "traefik.port=9000"
+      - "traefik.default.protocol=http"
+      - "traefik.frontend.rule=Host:portainer.$LB_DOMAIN"
+      - "traefik.frontend.headers.isDevelopment=true"
+    networks:
+      - external
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
